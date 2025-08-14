@@ -4,17 +4,18 @@ import os
 import pandas as pd
 import numpy as np
 from pulp import (
+    value as pulp_value,
     LpProblem,
     LpVariable,
     lpSum,
     LpMaximize,
     # GUROBI,
-    PULP_CBC_CMD,
+    PULP_CBC_CMD, LpStatus,
 )
 from loguru import logger
 
 from sqlalchemy import create_engine
-
+from model_helper import visualize_model
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
@@ -185,10 +186,10 @@ def run_optimization_quarterhours_repositioning(
         columns=["sum_buy", "sum_sell", "net_buy", "net_sell", "product"]
     ),
 ):
-    # copy prices_qh
+    # copy prices_qh #VWAP price
     prices_qh_adj = prices_qh.copy()
 
-    # loop through prices_qh and adjust prices
+    # loop through prices_qh and adjust prices to apply discount
     for i in prices_qh_adj.index:
         if not pd.isna(prices_qh_adj.loc[i, "price"]):
             prices_qh_adj.loc[i, "price"] = calculate_discounted_price(
@@ -234,14 +235,33 @@ def run_optimization_quarterhours_repositioning(
     charge_sign = LpVariable.dicts("charge_sign", prices_qh.index, cat="Binary")
 
     # Introduce auxiliary variables
+    '''
+    z represents the actual charge for each contract. z capture net buy only when charging
+    w represents the actual discharge for each contract. w capture net discharge only when discharing
+    together z-w reflects the actual net position of the SOC at each contract
+    '''
     z = LpVariable.dicts("z", prices_qh.index, lowBound=0)
     w = LpVariable.dicts("w", prices_qh.index, lowBound=0)
 
+
+    '''just a large number (“Big M”) that bounds the maximum possible accumualted charge/discharge. usually should not exceed as buy and sell are matched'''
     M = 100
 
+    ''' to limit unwanted small optimizations '''
     e = 0.01
 
     # Objective function
+    '''
+    previous trades (net_buy or net_sell) are always >=0
+    
+    so the adjusted_obj is for when no previous trade or very small.
+    in that case, the obj is sell price - buy price - 2*e - threshold
+    
+    the original obj is for when previous trade exists
+    in that case, the obj is sell price - buy price - e
+    
+    todo: small punishment on the new trade? 
+    '''
     # Adjusted objective component for cases where previous trades < e
     adjusted_obj = [
         (
@@ -330,20 +350,36 @@ def run_optimization_quarterhours_repositioning(
                 f"SellVsSOC_{i}",
             )
 
+        '''
+        without this the problem would be unbounded!!!!
+        '''
+
         # big M constraints for net buy and sell
+        '''
+        used to confirm z-w = current buy + prev_buy - current_sell -prev_sell
+        and also accumulated buy >0 and accumualted sell >0
+        '''
         m_battery += net_buy[i] <= M * charge_sign[i], f"NetBuyBigM_{i}"
         m_battery += net_sell[i] <= M * (1 - charge_sign[i]), f"NetSellBigM_{i}"
 
         m_battery += z[i] <= charge_sign[i] * M, f"ZUpper_{i}"
         m_battery += z[i] <= net_buy[i], f"ZNetBuy_{i}"
-        m_battery += z[i] >= net_buy[i] - (1 - charge_sign[i]) * M, f"ZLower_{i}"
+        m_battery += z[i] >= net_buy[i] - (1 - charge_sign[i]) * M, f"ZLower_{i}" # if charge mode, z >=0, otherwise no low limit
         m_battery += z[i] >= 0, f"ZNonNeg_{i}"
+        ''' this constraint actually also prevent over discharge'''
 
-        m_battery += w[i] <= (1 - charge_sign[i]) * M, f"WUpper_{i}"
-        m_battery += w[i] <= net_sell[i], f"WNetSell_{i}"
-        m_battery += w[i] >= net_sell[i] - charge_sign[i] * M, f"WLower_{i}"
-        m_battery += w[i] >= 0, f"WNonNeg_{i}"
+        '''
+        if discharge mode, w = net_sell and net_sell >0
+        if charge mode, w =0
+        '''
+        m_battery += w[i] <= (1 - charge_sign[i]) * M, f"WUpper_{i}" #if charge mode, w <=0 otherwise no upper limit
+        m_battery += w[i] <= net_sell[i], f"WNetSell_{i}" # <= netsell
+        m_battery += w[i] >= net_sell[i] - charge_sign[i] * M, f"WLower_{i}" # if charge mode, no low limit. otherwise >= netsell
+        m_battery += w[i] >= 0, f"WNonNeg_{i}" # non-neg
 
+        ''' 
+        this is also a constraint so z and w will move together
+        '''
         m_battery += (
             z[i] - w[i]
             == current_buy_qh[i]
@@ -353,6 +389,8 @@ def run_optimization_quarterhours_repositioning(
             f"Netting_{i}",
         )
 
+
+
     # set efficiency as sqrt of roundtrip efficiency
     m_battery += (
         lpSum(net_buy[i] * efficiency * 1.0 / 1.0 for i in prices_qh.index)
@@ -360,15 +398,32 @@ def run_optimization_quarterhours_repositioning(
         "MaxCycles",
     )
 
+    # #add fixing the charge_sign
+    # is_buy =  LpVariable.dicts("is_buy", prices_qh.index,cat="Binary")
+    # is_sell = LpVariable.dicts("is_sell", prices_qh.index, cat="Binary")
+    # for i in prices_qh.index:
+    #     m_battery += net_buy[i] >= e * is_buy[i]
+    #     m_battery += net_sell[i] >= e * is_sell[i]
+    #     m_battery += is_buy[i] + is_sell[i] <= 1
+    #     m_battery += charge_sign[i] == is_buy[i]
+
     # Solve the problem
     # m_battery.solve(GUROBI(msg=0))
 
+    # m_battery.writeLP("battery.lp")
+    # visualize_model(m_battery)
     # Solve the problem
     m_battery.solve(PULP_CBC_CMD(msg=0))
 
+    #display solving status
     # print(f"Status: {LpStatus[m_battery.status]}")
     # print(f"Objective value: {m_battery.objective.value()}")
+    # for name, constraint in m_battery.constraints.items():
+    #     lhs_value = pulp_value(constraint)  # LHS at the solution
+    #     print(f"{name}: actual value = {lhs_value}, boundary = {constraint.constant}")
+    #     # print(f"{name}: Shadow Price = {constraint.pi}, Slack = {constraint.slack}")
 
+    #handle outputs
     results = pd.DataFrame(
         columns=["current_buy_qh", "current_sell_qh", "battery_soc"],
         index=prices_qh.index,
@@ -385,9 +440,16 @@ def run_optimization_quarterhours_repositioning(
                 "execution_time": [execution_time],
                 "side": ["buy"],
                 "quantity": [current_buy_qh[i].value()],
+                "net_buy_vol":net_buy[i].value(),
+                "current_buy_vol":current_buy_qh[i].value(),
+                "battery_soc":battery_soc[i].value(), # "battery_soc"
                 "price": [prices_qh.loc[i, "price"]],
                 "product": [i],
                 "profit": [-current_buy_qh[i].value() * prices_qh.loc[i, "price"] / 1],
+                "z": [z[i].value()],
+                "w": [w[i].value()],
+                "charge_sign": [charge_sign[i].value()],
+
             }
 
             # append new trade using concat
@@ -399,9 +461,15 @@ def run_optimization_quarterhours_repositioning(
                 "execution_time": [execution_time],
                 "side": ["sell"],
                 "quantity": [current_sell_qh[i].value()],
+                "net_sell_vol":net_sell[i].value(),
+                "current_sell_vol":current_sell_qh[i].value(),
+                "battery_soc": battery_soc[i].value(),  # "battery_soc"
                 "price": [prices_qh.loc[i, "price"]],
                 "product": [i],
                 "profit": [current_sell_qh[i].value() * prices_qh.loc[i, "price"] / 1],
+                "z": [z[i].value()],
+                "w": [w[i].value()],
+                "charge_sign": [charge_sign[i].value()],
             }
 
             # append new trade using concat
@@ -414,6 +482,12 @@ def run_optimization_quarterhours_repositioning(
         results.loc[i, "net_sell"] = net_sell[i].value()
         results.loc[i, "charge_sign"] = charge_sign[i].value()
         results.loc[i, "battery_soc"] = battery_soc[i].value()
+        results.loc[i, "z"] = z[i].value()
+        results.loc[i, "w"] = w[i].value()
+        # results.loc[i, "is_buy"] = is_buy[i].value()
+        # results.loc[i, "is_sell"] = is_sell[i].value()
+        results.loc[i, "price"] = prices_qh.loc[i, "price"]
+
 
     return results, trades, m_battery.objective.value()
 
@@ -609,6 +683,8 @@ def simulate_period(
             )
 
             # vwap = get_closest_prices(execution_time_start, trading_end)
+            # todo: this func returns the closes single price to the execution time start. so it is a snapshot price, not a vwap.
+            #"For each delivery interval in a given list, find the trade whose execution time is closest to the given reference time, provided that the trade is within 150 seconds of it, and return that trade’s price."
 
             net_trades = get_net_trades(all_trades, trading_end)
 
@@ -717,12 +793,12 @@ if __name__=="__main__":
     simulate_period(
         period_start,
         period_end,
-        threshold=0,
-        threshold_abs_min=0,
-        discount_rate=0,
-        bucket_size=15,
-        c_rate=0.5,
+        threshold=0,#rel change for trading
+        threshold_abs_min=0, # abs change for trading
+        discount_rate=0, # time value?
+        bucket_size=15, # in minutes, group all trades in 15min into one bucket. todo: this is like perfect foresight setting?
+        c_rate=0.5, # c_rate * capacity is the charge speed, here means for 1MWh battery, 0.5 MW is the charge speed
         roundtrip_eff=0.86,
-        max_cycles=365,
-        min_trades=1,
+        max_cycles=365, # 1 cycle a day
+        min_trades=1, #in the bucket if the tades are less than min trade, the bucket will be skipped
     )

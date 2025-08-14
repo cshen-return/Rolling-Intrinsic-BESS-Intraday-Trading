@@ -240,45 +240,7 @@ def run_optimization_quarterhours_repositioning(
     e = 0.01
 
     # Objective function
-    # Adjusted objective component for cases where previous trades < e
-    adjusted_obj = [
-        (
-            (
-                current_sell_qh[i]
-                * (
-                    prices_qh_adj.loc[i, "price"]
-                    - max(
-                        abs((threshold / 100) * abs(prices_qh.loc[i, "price"])),
-                        threshold_abs_min,
-                    )
-                    / 2
-                    - e
-                )
-            )
-            - (
-                current_buy_qh[i]
-                * (
-                    prices_qh_adj_buy.loc[i, "price"]
-                    + max(
-                        abs((threshold / 100) * abs(prices_qh.loc[i, "price"])),
-                        threshold_abs_min,
-                    )
-                    / 2
-                    + e
-                )
-            )
-        )
-        * 1.0
-        / 4.0
-        for i in prices_qh.index
-        if not pd.isna(prices_qh.loc[i, "price"])
-        and (
-            prev_net_trades.loc[i, "net_buy"] < e
-            and prev_net_trades.loc[i, "net_sell"] < e
-        )
-    ]
 
-    # Original objective component for cases where previous trades >= e
     original_obj = [
         (
             current_sell_qh[i] * (prices_qh.loc[i, "price"] - e)
@@ -295,7 +257,7 @@ def run_optimization_quarterhours_repositioning(
     ]
 
     # Combine and set the objective
-    m_battery += lpSum(original_obj + adjusted_obj)
+    m_battery += lpSum(original_obj )
 
     # Constraints
     previous_index = prices_qh.index[0]
@@ -360,6 +322,7 @@ def run_optimization_quarterhours_repositioning(
 
     # Solve the problem
     # m_battery.solve(GUROBI(msg=0))
+
 
     # Solve the problem
     m_battery.solve(PULP_CBC_CMD(msg=0))

@@ -51,11 +51,20 @@ The notebook 'Create Randomized Intraday Transaction Data' constitutes the first
 ### Step 1: PostgreSQL Database Setup
 First, you need to set up the PostgreSQL database. You can follow these steps:
 
-Open a terminal and run the PostgreSQL command-line interface:
+open psql terminal from windows, use the password when you install the PostgreSQL server (if need change, can use PgAdmin app)
 
-```bash
-psql -d postgres
-```
+for Linux, uncomment the text to see how
+
+[//]: # (OR:)
+
+[//]: # ()
+[//]: # (Open a terminal and run the PostgreSQL command-line interface:)
+
+[//]: # (```bash)
+
+[//]: # (psql -d postgres)
+
+[//]: # (```)
 
 #### Create the `intradaydb` Database
 Create the database for your project:
@@ -85,6 +94,15 @@ Type `\q` to exit the PostgreSQL shell.
 \q
 ```
 
+#### check the database
+
+Type '\l' to list all databases:
+
+```bash
+\l
+```
+
+
 ### Step 2: Python Environment Setup
 Next, set up the Python environment. You'll need Python 3.8 or higher. You can set up a virtual environment and install the required dependencies as follows:
 
@@ -102,32 +120,61 @@ Install all required libraries listed in the `requirements.txt` file:
 pip install -r requirements.txt
 ```
 
-#### Optional -> Install Gurobi:
-Gurobi can be used as a solver in this project. Make sure you have a valid Gurobi license. If you haven't installed it yet, you can follow these steps:
 
-Install Gurobi Python bindings:
+NOTE: it's optional to use Gurobi solver instead of default CBC solver from pulp. uncomment the text to see more
 
-```bash
-pip install gurobipy
-```
+[//]: # ()
+[//]: # (#### Optional -> Install Gurobi:)
 
-Set up your Gurobi license (follow the instructions on the Gurobi website).
+[//]: # ()
+[//]: # (NOTE: THIS IS OPTIONAL)
 
-In the python files `Code/Rolling Intrinsic/Rolling Intrinsic H.py` & `Code/Rolling Intrinsic/Rolling Intrinsic QH.py`
-change to the GUROBI solver pulp provides and disable the default solver from pulp:
-```python
-from pulp import (
-    LpProblem,
-    LpVariable,
-    lpSum,
-    LpMaximize,
-    GUROBI,
-    # PULP_CBC_CMD,
-)
-...
-# m_battery.solve(PULP_CBC_CMD(msg=0))
-m_battery.solve(GUROBI(msg=0))
-```
+[//]: # ()
+[//]: # (Gurobi can be used as a solver in this project. Make sure you have a valid Gurobi license. If you haven't installed it yet, you can follow these steps:)
+
+[//]: # ()
+[//]: # (Install Gurobi Python bindings:)
+
+[//]: # ()
+[//]: # (```bash)
+
+[//]: # (pip install gurobipy)
+
+[//]: # (```)
+
+[//]: # ()
+[//]: # (Set up your Gurobi license &#40;follow the instructions on the Gurobi website&#41;.)
+
+[//]: # ()
+[//]: # (In the python files `Code/Rolling Intrinsic/Rolling Intrinsic H.py` & `Code/Rolling Intrinsic/Rolling Intrinsic QH.py`)
+
+[//]: # (change to the GUROBI solver pulp provides and disable the default solver from pulp:)
+
+[//]: # (```python)
+
+[//]: # (from pulp import &#40;)
+
+[//]: # (    LpProblem,)
+
+[//]: # (    LpVariable,)
+
+[//]: # (    lpSum,)
+
+[//]: # (    LpMaximize,)
+
+[//]: # (    GUROBI,)
+
+[//]: # (    # PULP_CBC_CMD,)
+
+[//]: # (&#41;)
+
+[//]: # (...)
+
+[//]: # (# m_battery.solve&#40;PULP_CBC_CMD&#40;msg=0&#41;&#41;)
+
+[//]: # (m_battery.solve&#40;GUROBI&#40;msg=0&#41;&#41;)
+
+[//]: # (```)
 
 ### Step 3: Create randomized transaction data (or use actual EPEX Spot data)
 
